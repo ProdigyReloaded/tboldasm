@@ -1,0 +1,2 @@
+bitstruct==8.12.1
+columnar
