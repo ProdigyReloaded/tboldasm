@@ -12,121 +12,67 @@
 #
 # You should have received a copy of the GNU Affero General Public License along with Prodigy Reloaded. If not,
 # see <https://www.gnu.org/licenses/>.
-
+import io
 import math
 import struct
-from typing import Union
+from typing import Union, List
 
 import bitstruct
 
 from defines import gevs, functions, actions
 from gvars import procedures, labels
-import gvars
+from operands import Operand, IndexedOperand, NumericOperand, IndexOperandValue, LiteralOperand, OffsetOperand
 
-def handle_complex(b, operands):
-    b.extend(gvars.f.read(1))
+
+def read(file: io.BufferedIOBase, bytecount: int = 1) -> bytearray:
+    return bytearray(file.read(bytecount))
+
+
+def handle_complex(b: bytearray, operands: List[Union[Operand, IndexedOperand]], file: io.BufferedIOBase):
+    b.extend(read(file))
     if b[-2] & 0x80:
-        b.extend(gvars.f.read(1))
+        b.extend(read(file))
         operands.append(IndexedOperand(
             NumericOperand(int.from_bytes(b[-3:-1], 'big') & 0x7fff),
             IndexOperandValue(int.from_bytes(b[-1:], 'big'))))
     else:
         operands.append(NumericOperand(struct.unpack(">h", b[-2:])[0]))
 
-def handle_string(b, operands):
-    b.extend(gvars.f.read(1))
+
+def handle_string(b: bytearray, operands: List[Union[Operand, IndexedOperand]], file: io.BufferedIOBase):
+    b.extend(read(file))
     count = max(b[-1], 1)
-    b.extend(gvars.f.read(b[1]))
+    b.extend(read(file, bytecount=b[1]))
     literal = b[count * -1:].decode('unicode_escape')
     operands.append(LiteralOperand(literal))
 
 
-def handle_var_args(operand_count, is_complex, operand_mode, operands, instruction_bytes):
+def handle_var_args(operand_count: int, is_complex: bool, operand_mode, operands: List[Union[Operand, IndexedOperand]], instruction_bytes, file: io.BufferedIOBase):
     for i in range(0, operand_count):
-        b = bytearray(gvars.f.read(1))
+        b = read(file)
         if is_complex and operand_mode[i] is True:
-            handle_complex(b, operands)
+            handle_complex(b, operands, file)
         elif b[0] == 0x00:
-            handle_string(b, operands)
+            handle_string(b, operands, file)
         else:
             operands.append(NumericOperand(b[-1]))
         instruction_bytes.extend(b)
 
+def get_function(function: Operand) -> [str|int]:
+    if isinstance(function, NumericOperand):
+        function = int(function.value)
+    elif isinstance(function, LiteralOperand):
+        function = function.value.decode('ascii')
+        function = function.isnumeric() and int(function) or function
+    return functions.get(function, function)
 
-class Operand:
-    def __init__(self, value):
-        self.value = value
-    def __str__(self):
-        return "0x{:02X}".format(self.value)
-
-
-class IndexedOperand:
-    def __init__(self, variable: Operand, index: Operand):
-        self.variable = variable
-        self.index = index
-
-    def __str__(self):
-        return "{}({})".format(self.variable, self.index)
-
-
-class LiteralOperand(Operand):
-    def __str__(self):
-        # return repr(self.value)
-        res = ""
-        for i in self.value:
-            if type(i) == str:
-                i = ord(i)
-
-            if 0x20 <= i <= 0x7E:
-                res += chr(i)
-            else:
-                res += "\\x{:02x}".format(i)
-        return "'{}'".format(res)
-
-class IndexOperandValue(Operand):
-    def __str__(self):
-        if 9 <= self.value <= 16:
-            return "I{}".format(int(self.value) - 8)
-        elif 17 <= self.value <= 24:
-            return "D{}".format(int(self.value) - 16)
-        elif 25 <= self.value <= 33:
-            return "P{}".format(int(self.value) - 25)
-        elif 34 <= self.value <= 255:
-            return "${}".format(int(self.value) - 33)
-        else:
-            return "0x{:x}".format(self.value)
-
-class NumericOperand(Operand):
-    def __str__(self):
-        if 9 <= self.value <= 16:
-            return "I{}".format(int(self.value) - 8)
-        elif 17 <= self.value <= 24:
-            return "D{}".format(int(self.value) - 16)
-        elif 25 <= self.value <= 33:
-            return "P{}".format(int(self.value) - 25)
-        elif 34 <= self.value <= 191:
-            return "${}".format(int(self.value) - 33)
-        elif 192 <= self.value <= 255:
-            return "&{}".format(int(self.value) - 191)
-        elif 256 <= self.value <= 319:
-            return "${}".format(int(self.value) - 97)
-        elif 320 <= self.value <= 511:
-            return "&{}".format(int(self.value) - 255)
-        elif 0x200 <= self.value <= 0x7EFF:
-            return gevs.get(self.value - 0x200 + 1, "#{}".format(self.value - 0x200 + 1))
-        else:
-            return "0x{:x}".format(self.value)
-
-
-class OffsetOperand(Operand):
-    def __init__(self, value):
-        super(OffsetOperand, self).__init__(value)
-        self.address = gvars.f.tell() - gvars.main_loc
-        self.target = self.address + self.value
-
-    def __str__(self):
-        return "0x{:x}".format(self.value)
-
+def get_action(action: Operand) -> [str|int]:
+    if isinstance(action, NumericOperand):
+        action = int(action.value)
+    elif isinstance(action, LiteralOperand):
+        action = action.value.decode('ascii')
+        action = action.isnumeric() and int(action) or action
+    return actions.get(action, action)
 
 class Instruction:
     OPERANDS: int = 0
@@ -143,31 +89,31 @@ class Instruction:
         return [o for o in self.operands if isinstance(o, OffsetOperand)]
 
     @classmethod
-    def decode(cls, instr, is_complex):
+    def decode(cls, instr, is_complex, file):
         instruction_bytes = bytearray(instr)
-        operands: list[Union[Operand, IndexedOperand]] = list()
+        operands: list[Operand | IndexedOperand] = list()
 
         operand_mode = None
         if is_complex:
             # read the mode byte
-            instruction_bytes.extend(gvars.f.read(1))
+            instruction_bytes.extend(read(file))
             operand_mode = bitstruct.unpack('b1b1b1b1b1b1b1b1', instruction_bytes[-1:])
 
         operand_count = cls.OPERANDS
         if operand_count == -1:
-            instruction_bytes.extend(gvars.f.read(1))
+            instruction_bytes.extend(read(file))
             operand_count = instruction_bytes[-1]
 
         for i in range(0, operand_count):
-            b = bytearray(gvars.f.read(1))
+            b = read(file)
             if is_complex and operand_mode[i] is True:
-                handle_complex(b, operands)
+                handle_complex(b, operands, file)
             elif b[0] == 0x00:
                 # it's a string
-                b.extend(gvars.f.read(1))
+                b.extend(read(file))
                 count = b[-1]
                 if count > 0:
-                    b.extend(gvars.f.read(b[1]))
+                    b.extend(read(file, bytecount=b[1]))
                     operands.append(LiteralOperand(b[count * -1:]))
                 elif count == 0:
                     operands.append(LiteralOperand(''))
@@ -189,16 +135,16 @@ class OffsetInstruction(Instruction):
     MNEMONIC = ""
 
     @classmethod
-    def decode(cls, instr, is_complex):
-        i = super(OffsetInstruction, cls).decode(instr, is_complex)
-        i.instruction_bytes.extend(gvars.f.read(2))
+    def decode(cls, instr, is_complex, file):
+        i = super(OffsetInstruction, cls).decode(instr, is_complex, file)
+        i.instruction_bytes.extend(read(file, bytecount=2))
         i.operands.append(OffsetOperand(struct.unpack('>h', i.instruction_bytes[-2:])[0]))
         return i
 
     def __str__(self):
         return "{} {}, {}".format(self.MNEMONIC, ', '.join([str(operand) for operand in self.operands[:-1]]),
-                                   labels.get(self.operands[-1].value + self.address + len(self.instruction_bytes),
-                                              "0x{:x}".format(self.operands[-1].value))).rstrip() + ";"
+                                  labels.get(self.operands[-1].value + self.address + len(self.instruction_bytes),
+                                             "0x{:x}".format(self.operands[-1].value))).rstrip() + ";"
 
 
 class Break(Instruction):
@@ -259,9 +205,9 @@ class DefField(Instruction):
     MNEMONIC = "DEFINE_FIELD"
 
     @classmethod
-    def decode(cls, instr, is_complex):
-        i = super(DefField, cls).decode(instr, is_complex)
-        i.instruction_bytes.extend(gvars.f.read(1))
+    def decode(cls, instr, is_complex, file):
+        i = super(DefField, cls).decode(instr, is_complex, file)
+        i.instruction_bytes.extend(read(file))
         i.operands.append(NumericOperand(int.from_bytes(i.instruction_bytes[-1:], 'big')))
         return i
 
@@ -270,6 +216,7 @@ class DefFieldPgm(Instruction):
     OPCODE = b'\x09'
     OPERANDS = 6
     MNEMONIC = "DEFINE_FIELD"
+
 
 # TODO resolve the field constants
 # 0x8000 - ACTION
@@ -291,10 +238,10 @@ class SetAtt(Instruction):
     MNEMONIC = "SET_ATTRIBUTE"
 
     @classmethod
-    def decode(cls, instr, is_complex):
-        i = super(SetAtt, cls).decode(instr, is_complex)
+    def decode(cls, instr, is_complex, file):
+        i = super(SetAtt, cls).decode(instr, is_complex, file)
         # new_state
-        i.instruction_bytes.extend(gvars.f.read(1))
+        i.instruction_bytes.extend(read(file))
         i.operands.append(Operand(i.instruction_bytes[-1]))
         # TODO this is actually two bytes; decode per the table above
 
@@ -302,34 +249,34 @@ class SetAtt(Instruction):
         new_state = i.operands[-1].value
         if new_state & 0x10:
             # string operand follows with new form?
-            b = bytearray(gvars.f.read(1))
+            b = read(file)
             if b[0] == 0x00:
                 # it's a string
-                b.extend(gvars.f.read(1))
+                b.extend(read(file))
                 count = max(b[-1], 1)
-                b.extend(gvars.f.read(b[1]))
+                b.extend(read(file, bytecount=b[1]))
                 i.operands.append(LiteralOperand(b[count * -1:]))
             else:
                 i.operands.append(NumericOperand(b[-1]))
             i.instruction_bytes.extend(b)
         else:
             # new_form
-            i.instruction_bytes.extend(gvars.f.read(1))
+            i.instruction_bytes.extend(read(file))
             i.operands.append(NumericOperand(i.instruction_bytes[-1]))
             new_form = i.instruction_bytes[-1]
 
         # new_foreground
-        i.instruction_bytes.extend(gvars.f.read(1))
+        i.instruction_bytes.extend(read(file))
         i.operands.append(NumericOperand(i.instruction_bytes[-1]))
 
         # new_background
-        i.instruction_bytes.extend(gvars.f.read(1))
+        i.instruction_bytes.extend(read(file))
         i.operands.append(NumericOperand(i.instruction_bytes[-1]))
 
         if new_form & 0x20:
-            i.instruction_bytes.extend(gvars.f.read(1))
+            i.instruction_bytes.extend(read(file))
             count = i.instruction_bytes[-1]
-            i.instruction_bytes.extend(gvars.f.read(count))
+            i.instruction_bytes.extend(read(file, bytecount=count))
             literal = i.instruction_bytes[count * -1:].decode('unicode_escape')
             i.operands.append(LiteralOperand(literal))
 
@@ -392,24 +339,39 @@ class Disconnect(Instruction):
 
 # Abstract for common decode bits
 class Send(Instruction):
+    def __init__(self, *args, **kwargs):
+        super(Send, self).__init__(*args, **kwargs)
+
+        self.timeout = None
+        self.opt_hdrs = False
+        self.priority = False
+
     @classmethod
-    def decode(cls, instr, is_complex):
-        i = super(Send, cls).decode(instr, is_complex)
+    def decode(cls, instr, is_complex, file):
+        i = super(Send, cls).decode(instr, is_complex, file)
 
-        # Timeout; patent source shows it as big endian, but the values in 6.03.10 suggest little endian;
-        # e.g, 0x2d00 and 0x3c00 = (11520, 15360) vs 0x002d, 0x003c = (45, 60)
-        i.instruction_bytes.extend(gvars.f.read(2))
-        i.operands.append(NumericOperand(struct.unpack('>h', i.instruction_bytes[-2:])[0]))
+        i.instruction_bytes.extend(read(file, bytecount=2))
+        i.timeout = struct.unpack('<h', i.instruction_bytes[-2:])[0]
 
-        # OptHdr
-        i.instruction_bytes.extend(gvars.f.read(1))
-        i.operands.append(NumericOperand(i.instruction_bytes[-1]))
-
-        # TODO resolve the OptHdr values to mnemonics
-        # hdrflag = OptHdr & OPTHDRMSK (0x2)
-        # bpriority = OptHdr & PRIORITYMSK (0x4)
+        i.instruction_bytes.extend(read(file))
+        i.priority = i.instruction_bytes[-1] & 0x4
+        i.opt_hdrs = i.instruction_bytes[-1] & 0x2
 
         return i
+
+    def get_opt_args(self):
+        optargs = list()
+
+        if self.timeout:
+            optargs.append("TIMEOUT({})".format(self.timeout))
+
+        if self.priority:
+            optargs.append("PRIORITY")
+
+        if self.opt_hdrs:
+            optargs.append("OPT_HDRS")
+
+        return optargs
 
 
 class SendNoId(Send):
@@ -417,11 +379,19 @@ class SendNoId(Send):
     OPERANDS = 1
     MNEMONIC = "SEND"
 
+    def __str__(self):
+        args = self.operands[-1:] + self.get_opt_args()
+        return "SEND {};".format(', '.join(str(arg) for arg in args))
+
 
 class SendId(Send):
     OPCODE = b'\x15'
     OPERANDS = 2
     MNEMONIC = "SEND"
+
+    def __str__(self):
+        args = self.operands[-2:] + self.get_opt_args()
+        return "SEND {};".format(', '.join(str(arg) for arg in args))
 
 
 class Receive(Instruction):
@@ -521,10 +491,12 @@ class Move(Instruction):
     OPERANDS = 2
     MNEMONIC = "MOVE"
 
+
 class MoveBlock(Instruction):
-    OPCODE =b'\x62'
+    OPCODE = b'\x62'
     OPERANDS = 3
     MNEMONIC = "MOVE"
+
 
 class MoveAbs(Instruction):
     OPCODE = b'\x26'
@@ -619,30 +591,28 @@ class MakeFormat(Instruction):
     MNEMONIC = "MAKE_FORMAT"
 
     @classmethod
-    def decode(cls, instr, is_complex):
+    def decode(cls, instr, is_complex, file):
         instruction_bytes = bytearray(instr)
-        operands: list[Union[Operand, IndexedOperand]] = list()
+        operands: list[Operand | IndexedOperand] = list()
 
         operand_mode = list()
         if is_complex:
             # read the mode byte
-            instruction_bytes.extend(gvars.f.read(1))
+            instruction_bytes.extend(read(file))
             operand_mode.extend(bitstruct.unpack('b1b1b1b1b1b1b1b1', instruction_bytes[-1:]))
 
-        instruction_bytes.extend(gvars.f.read(1))
+        instruction_bytes.extend(read(file))
         operand_count = instruction_bytes[-1] * 3 + 1
 
         if is_complex:
-            addoper = (operand_count - 8)
-            if addoper < 0:
-                is_complex = False
-            else:
+            addoper = (operand_count - 8)   # this is wrong.
+            if addoper > 0:
                 addmode = math.ceil(addoper / 8)
                 for i in range(addmode):
-                    instruction_bytes.extend(gvars.f.read(1))
+                    instruction_bytes.extend(read(file))
                     operand_mode.extend(bitstruct.unpack('b1b1b1b1b1b1b1b1', instruction_bytes[-1:]))
 
-        handle_var_args(operand_count, is_complex, operand_mode, operands, instruction_bytes)
+        handle_var_args(operand_count, is_complex, operand_mode, operands, instruction_bytes, file)
 
         return cls(instruction_bytes, operands)
 
@@ -737,11 +707,11 @@ class Start(Instruction):
     MNEMONIC = "START"
 
     @classmethod
-    def decode(cls, instr, is_complex):
+    def decode(cls, instr, is_complex, file):
         instruction_bytes = bytearray(instr)
         operands: list[Operand] = list()
 
-        instruction_bytes.extend(gvars.f.read(3))
+        instruction_bytes.extend(read(file, bytecount=3))
         for i in range(3):
             operands.append(NumericOperand(instruction_bytes[-1 * i]))
 
@@ -767,36 +737,20 @@ class SetKeyPrg(Instruction):
     # think disambiguated between opcodes by arg count
 
 
+
+
 class SetFunc(Instruction):
     OPCODE = b'\x44'
     OPERANDS = 2
     MNEMONIC = "SET_FUNCTION"
 
     def __str__(self):
-        # TODO rewrite the __str__ that deal with function and action; maybe figure out a better inheritance here for
-        #   code reuse
         # TODO sometimes this resolves things improperly.  E.g., an operand might actually mean register P7,
         #   but that is being resolved to whatever P7's memory address is, within the defined functions table
-        function = self.operands[0]
-        if isinstance(function, NumericOperand):
-            function = functions.get(int(function.value), int(function.value))
-        elif isinstance(function, LiteralOperand):
-            function = function.value.decode('ascii')
-            if function.isnumeric():
-                function = functions.get(int(function), int(function))
-
-        action = self.operands[1]
-        if isinstance(action, NumericOperand):
-            action = int(action.value)
-        elif isinstance(action, LiteralOperand):
-            action = action.value.decode('ascii')
-            action = action.isnumeric() and int(action) or action
-
         return "{} {}, {};".format(self.MNEMONIC,
-                                   function,
-                                   actions.get(action, action)
+                                   get_function(self.operands[0]),
+                                   get_action(self.operands[1])
                                    )
-
 
 class SetFuncPgm(Instruction):
     OPCODE = b'\x45'
@@ -804,21 +758,9 @@ class SetFuncPgm(Instruction):
     MNEMONIC = "SET_FUNCTION"
 
     def __str__(self):
-        function = self.operands[0]
-        if isinstance(function, NumericOperand):
-            function = int(function.value)
-        elif isinstance(function, LiteralOperand):
-            function = function.value.decode('ascii')
-        action = self.operands[1]
-        if isinstance(action, NumericOperand):
-            action = int(action.value)
-        elif isinstance(action, LiteralOperand):
-            action = action.value.decode('ascii')
-            action = action.isnumeric() and int(action) or action
-
         return "{} {}, {}, {};".format(self.MNEMONIC,
-                                       functions.get(int(function), function),
-                                       actions.get(action, action),
+                                       get_function(self.operands[0]),
+                                       get_action(self.operands[1]),
                                        self.operands[2]
                                        )
 
@@ -857,20 +799,20 @@ class Transfer(Instruction):
     MNEMONIC = "TRANSFER"
 
     @classmethod
-    def decode(cls, instr, is_complex):
+    def decode(cls, instr, is_complex, file):
         instruction_bytes = bytearray(instr)
         operands: list[Operand] = list()
 
         operand_mode = None
         if is_complex:
             # read the mode byte
-            instruction_bytes.extend(gvars.f.read(1))
+            instruction_bytes.extend(read(file))
             operand_mode = bitstruct.unpack('b1b1b1b1b1b1b1b1', instruction_bytes[-1:])
 
-        instruction_bytes.extend(gvars.f.read(1))
+        instruction_bytes.extend(read(file))
         operand_count = instruction_bytes[-1]
 
-        handle_var_args(operand_count, is_complex, operand_mode, operands, instruction_bytes)
+        handle_var_args(operand_count, is_complex, operand_mode, operands, instruction_bytes, file)
 
         return cls(instruction_bytes, operands)
 
@@ -887,10 +829,10 @@ class GoDep(Instruction):
     MNEMONIC = "GOTO_DEPENDING_ON"
 
     @classmethod
-    def decode(cls, instr, is_complex):
-        i = super(GoDep, cls).decode(instr, is_complex)
+    def decode(cls, instr, is_complex, file):
+        i = super(GoDep, cls).decode(instr, is_complex, file)
         for count in range(i.instruction_bytes[-1]):
-            i.instruction_bytes.extend(gvars.f.read(2))
+            i.instruction_bytes.extend(read(file, bytecount=2))
             i.operands.append(OffsetOperand(struct.unpack('>h', i.instruction_bytes[-2:])[0]))
 
         return i
@@ -911,38 +853,35 @@ class Error(Instruction):
 class SaveField(Instruction):
     OPCODE = b'\x4d'
     OPERANDS = 2
-    #MNEMONIC = "SAVE!"
     MNEMONIC = "SAVE"
-    # think this is disambiguated by # or args
 
     # Number of Fields, Block Name, first field
     # seems mode byte applies to operands following the number of fields
     # TODO this is hacky, fix it
     @classmethod
-    def decode(cls, instr, is_complex):
+    def decode(cls, instr, is_complex, file):
         instruction_bytes = bytearray(instr)
-        operands: list[Union[Operand, IndexedOperand]] = list()
+        operands: list[Operand | IndexedOperand] = list()
 
         operand_mode = None
         if is_complex:
             # read the mode byte
-            instruction_bytes.extend(gvars.f.read(1))
+            instruction_bytes.extend(read(file))
             operand_mode = bitstruct.unpack('b1b1b1b1b1b1b1b1', instruction_bytes[-1:])
 
-        # read number of fields
         operand_count = cls.OPERANDS
-        instruction_bytes.extend(gvars.f.read(1))
+        instruction_bytes.extend(read(file))
         operands.append(NumericOperand(struct.unpack("B", instruction_bytes[-1:])[0]))
 
         for i in range(0, operand_count):
-            b = bytearray(gvars.f.read(1))
+            b = read(file)
             if is_complex and operand_mode[i] is True:
-                handle_complex(b, operands)
+                handle_complex(b, operands, file)
             elif b[0] == 0x00:
                 # it's a string
-                b.extend(gvars.f.read(1))
+                b.extend(read(file))
                 count = max(b[-1], 1)
-                b.extend(gvars.f.read(b[1]))
+                b.extend(read(file, bytecount=b[1]))
                 operands.append(LiteralOperand(b[count * -1:]))
             else:
                 operands.append(NumericOperand(b[-1]))
@@ -976,23 +915,23 @@ class ClearField(Instruction):
     MNEMONIC = "CLEAR"
 
     @classmethod
-    def decode(cls, instr, is_complex):
+    def decode(cls, instr, is_complex, file):
         instruction_bytes = bytearray(instr)
-        operands: list[Union[Operand, IndexedOperand]] = list()
+        operands: list[Operand | IndexedOperand] = list()
 
         operand_mode = None
         if is_complex:
             # read the mode byte
-            instruction_bytes.extend(gvars.f.read(1))
+            instruction_bytes.extend(read(file))
             operand_mode = bitstruct.unpack('b1b1b1b1b1b1b1b1', instruction_bytes[-1:])
 
-        instruction_bytes.extend(gvars.f.read(1))
+        instruction_bytes.extend(read(file))
 
-        b = bytearray(gvars.f.read(1))
+        b = read(file)
         if is_complex and operand_mode[0] is True:
-            handle_complex(b, operands)
+            handle_complex(b, operands, file)
         elif b[0] == 0x00:
-            handle_string(b, operands)
+            handle_string(b, operands, file)
         else:
             operands.append(NumericOperand(b[-1]))
         instruction_bytes.extend(b)
@@ -1054,14 +993,7 @@ class TrigFunc(Instruction):
     MNEMONIC = "TRIGGER_FUNCTION"
 
     def __str__(self):
-        function = self.operands[0]
-        if isinstance(function, NumericOperand):
-            function = int(function.value)
-        elif isinstance(function, LiteralOperand):
-            function = function.value.decode('ascii')
-            function = function.isnumeric() and int(function) or function
-
-        return "{} {};".format(self.MNEMONIC, functions.get(function, function))
+        return "{} {};".format(self.MNEMONIC, get_function(self.operands[0]))
 
 
 class FileScreen(Instruction):
@@ -1131,27 +1063,15 @@ class OpenErrWin(Instruction):
     # TODO think this is disambiguated by arg count
 
 
-class SetFuncPgm2(Instruction):
+class SetFunc2(Instruction):
     OPCODE = b'\x6c'
     OPERANDS = 4
     MNEMONIC = "SET_FUNCTION"
 
     def __str__(self):
-        function = self.operands[0]
-        if isinstance(function, NumericOperand):
-            function = int(function.value)
-        elif isinstance(function, LiteralOperand):
-            function = function.value.decode('ascii')
-        action = self.operands[1]
-        if isinstance(action, NumericOperand):
-            action = int(action.value)
-        elif isinstance(action, LiteralOperand):
-            action = action.value.decode('ascii')
-            action = action.isnumeric() and int(action) or action
-
         return "{} {}, {}, {}, {};".format(self.MNEMONIC,
-                                           functions.get(int(function), function),
-                                           actions.get(action, action),
+                                           get_function(self.operands[0]),
+                                           get_action(self.operands[1]),
                                            self.operands[2],
                                            self.operands[3]
                                            )
@@ -1159,7 +1079,7 @@ class SetFuncPgm2(Instruction):
 
 class OpenErrWin2(Instruction):
     OPCODE = b'\x6d'
-    OPERANDS = 2                    # Confirmed with RSD debugger
+    OPERANDS = 2  # Confirmed with RSD debugger
     MNEMONIC = "OPEN_ERROR_WINDOW"
 
 

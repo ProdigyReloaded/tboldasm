@@ -13,7 +13,9 @@
 # You should have received a copy of the GNU Affero General Public License along with Prodigy Reloaded. If not,
 # see <https://www.gnu.org/licenses/>.
 
+from typing import Optional, IO
+
 procedures: dict[int, str] = dict()
 labels: dict[int, str] = dict()
-f = None
-main_loc = None
+f: Optional[IO] = None
+main_loc: Optional[int] = None

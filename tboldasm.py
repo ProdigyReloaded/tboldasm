@@ -139,7 +139,7 @@ opcodes = {
     # 0x69:
     0x6a: OpenErrWin,
     0x6b: DefFieldPgm2,
-    0x6c: SetFuncPgm2,
+    0x6c: SetFunc2,
     0x6d: OpenErrWin2,
     0x6e: DeleteFile
 
@@ -223,7 +223,7 @@ class Program:
             else:
                 # decode the instruction and store the address for resolving calls, jumps, etc
                 # TODO would be better to pass the address into the opcode decoder
-                self.instructions[address] = opcodes[opcode].decode(instr, is_complex)
+                self.instructions[address] = opcodes[opcode].decode(instr, is_complex, f)
                 self.instructions[address].address = address
 
                 # all call / jump targets to respective tables
@@ -284,15 +284,10 @@ def get_label(addr):
     else:
         return ""
 
-def format_instr(_bytes):
-    res = ""
-    total = len(_bytes)
-    for i, _byte in enumerate(_bytes):
-        res += "{:02X} ".format(_byte)
-        if (i + 1) % 8 == 0 and i < total:
-            res += "\n"
 
-    return res
+
+def format_instr(_bytes):
+    return '\n'.join(' '.join('{:02X}'.format(b) for b in _bytes[i:i+8]) for i in range(0, len(_bytes), 8))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
