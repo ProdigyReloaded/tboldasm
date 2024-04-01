@@ -23,6 +23,7 @@ from defines import gevs, functions, actions
 from gvars import procedures, labels
 from operands import Operand, IndexedOperand, NumericOperand, IndexOperandValue, LiteralOperand, OffsetOperand
 
+
 def read(file: io.BufferedIOBase, bytecount: int = 1) -> bytearray:
     return bytearray(file.read(bytecount))
 
@@ -46,7 +47,8 @@ def handle_string(b: bytearray, operands: List[Union[Operand, IndexedOperand]], 
     operands.append(LiteralOperand(literal))
 
 
-def handle_var_args(operand_count: int, is_complex: bool, operand_mode, operands: List[Union[Operand, IndexedOperand]], instruction_bytes, file: io.BufferedIOBase):
+def handle_var_args(operand_count: int, is_complex: bool, operand_mode, operands: List[Union[Operand, IndexedOperand]],
+                    instruction_bytes, file: io.BufferedIOBase):
     for i in range(0, operand_count):
         b = read(file)
         if is_complex and operand_mode[i] is True:
@@ -57,7 +59,8 @@ def handle_var_args(operand_count: int, is_complex: bool, operand_mode, operands
             operands.append(NumericOperand(b[-1]))
         instruction_bytes.extend(b)
 
-def get_function(function: Operand) -> [str|int]:
+
+def get_function(function: Operand) -> [str | int]:
     if isinstance(function, NumericOperand):
         function = int(function.value)
     elif isinstance(function, LiteralOperand):
@@ -65,13 +68,15 @@ def get_function(function: Operand) -> [str|int]:
         function = function.isnumeric() and int(function) or function
     return functions.get(function, function)
 
-def get_action(action: Operand) -> [str|int]:
+
+def get_action(action: Operand) -> [str | int]:
     if isinstance(action, NumericOperand):
         action = int(action.value)
     elif isinstance(action, LiteralOperand):
         action = action.value.decode('ascii')
         action = action.isnumeric() and int(action) or action
     return actions.get(action, action)
+
 
 class Instruction:
     OPERANDS: int = 0
@@ -615,7 +620,7 @@ class MakeFormat(Instruction):
         operand_count = instruction_bytes[-1] * 3 + 1
 
         if is_complex:
-            addoper = (operand_count - 8)   # this is wrong.
+            addoper = (operand_count - 8)  # this is wrong.
             if addoper > 0:
                 addmode = math.ceil(addoper / 8)
                 for i in range(addmode):
@@ -747,8 +752,6 @@ class SetKeyPrg(Instruction):
     # think disambiguated between opcodes by arg count
 
 
-
-
 class SetFunc(Instruction):
     OPCODE = b'\x44'
     OPERANDS = 2
@@ -761,6 +764,7 @@ class SetFunc(Instruction):
                                    get_function(self.operands[0]),
                                    get_action(self.operands[1])
                                    )
+
 
 class SetFuncPgm(Instruction):
     OPCODE = b'\x45'
@@ -898,6 +902,9 @@ class SaveField(Instruction):
             instruction_bytes.extend(b)
 
         return cls(instruction_bytes, operands)
+
+    def __str__(self):
+        return "SAVE {}, {};".format(self.operands[1], self.operands[2])
 
 
 class SaveFields(Instruction):
