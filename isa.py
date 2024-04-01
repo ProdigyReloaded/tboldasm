@@ -23,7 +23,6 @@ from defines import gevs, functions, actions
 from gvars import procedures, labels
 from operands import Operand, IndexedOperand, NumericOperand, IndexOperandValue, LiteralOperand, OffsetOperand
 
-
 def read(file: io.BufferedIOBase, bytecount: int = 1) -> bytearray:
     return bytearray(file.read(bytecount))
 
@@ -240,45 +239,56 @@ class SetAtt(Instruction):
     @classmethod
     def decode(cls, instr, is_complex, file):
         i = super(SetAtt, cls).decode(instr, is_complex, file)
-        # new_state
+
+        # read and decode 1st byte
         i.instruction_bytes.extend(read(file))
-        i.operands.append(Operand(i.instruction_bytes[-1]))
-        # TODO this is actually two bytes; decode per the table above
 
-        new_form = 0
-        new_state = i.operands[-1].value
-        if new_state & 0x10:
-            # string operand follows with new form?
-            b = read(file)
-            if b[0] == 0x00:
-                # it's a string
-                b.extend(read(file))
-                count = max(b[-1], 1)
-                b.extend(read(file, bytecount=b[1]))
-                i.operands.append(LiteralOperand(b[count * -1:]))
-            else:
-                i.operands.append(NumericOperand(b[-1]))
-            i.instruction_bytes.extend(b)
-        else:
-            # new_form
-            i.instruction_bytes.extend(read(file))
-            i.operands.append(NumericOperand(i.instruction_bytes[-1]))
-            new_form = i.instruction_bytes[-1]
+        b = i.instruction_bytes[-1]
 
-        # new_foreground
+        opstr = []
+        formstr = False
+
+        if b == 0x80:
+            opstr.append("ACTION")
+        elif b == 0x40:
+            opstr.append("DISPLAY")
+        elif b == 0x20:
+            opstr.append("INPUT")
+        elif b == 0x00:
+            opstr.append("ALPHANUMERIC")
+
+        # read and decode 2nd byte
         i.instruction_bytes.extend(read(file))
-        i.operands.append(NumericOperand(i.instruction_bytes[-1]))
+        b = i.instruction_bytes[-1]
 
-        # new_background
-        i.instruction_bytes.extend(read(file))
-        i.operands.append(NumericOperand(i.instruction_bytes[-1]))
+        if b == 0x80:
+            opstr.append("ALPHABETIC")
+        elif b == 0x40:
+            opstr.append("NUMERIC")
+        elif b == 0x20:
+            formstr = True
+        elif b == 0x10:
+            opstr.append("PASSWORD")
 
-        if new_form & 0x20:
+        # read the color bytes
+        i.instruction_bytes.extend(read(file, bytecount=2))
+
+        (fg, bg) = i.instruction_bytes[-2:]
+
+        if fg != 0x80 and bg != 0x80:
+            opstr.append("COLOR({},{})".format(fg, bg))
+
+        # read the form string if there is one:
+        if formstr:
             i.instruction_bytes.extend(read(file))
             count = i.instruction_bytes[-1]
-            i.instruction_bytes.extend(read(file, bytecount=count))
-            literal = i.instruction_bytes[count * -1:].decode('unicode_escape')
-            i.operands.append(LiteralOperand(literal))
+            if count > 0:
+                val = read(file, bytecount=count)
+                i.instruction_bytes.extend(val)
+
+                opstr.append("FORM({})".format(val.decode('ascii')))
+
+        i.operands.append(LiteralOperand(' '.join(opstr)))
 
         return i
 
