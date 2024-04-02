@@ -785,7 +785,8 @@ class Call(OffsetInstruction):
     MNEMONIC = "CALL"
 
     def __str__(self):
-        res = "{}".format(procedures[self.address + int(self.operands[-1].value) + len(self.instruction_bytes)])
+        name = procedures[self.address + int(self.operands[-1].value) + len(self.instruction_bytes)] or "UndefinedProcedure"
+        res = "{}".format(name)
         if len(self.operands) > 1:
             res += " "
             res += ", ".join([str(o) for o in self.operands[:-1]])

@@ -228,9 +228,14 @@ class Program:
 
                 # all call / jump targets to respective tables
                 if isinstance(self.instructions[address], Call):
-                    target = int(self.instructions[address].operands[-1].value) + f.tell() - self.main_loc
-                    if target not in procedures:
-                        procedures[target] = next(procedure_name)
+                    offset = int(self.instructions[address].operands[-1].value)
+                    target = offset + f.tell() - self.main_loc
+
+                    if offset == 0:
+                        procedures[target] = None
+                    else:
+                        if target not in procedures:
+                            procedures[target] = next(procedure_name)
                 elif isinstance(self.instructions[address], OffsetInstruction):
                     target = int(self.instructions[address].operands[-1].value) + f.tell() - self.main_loc
                     if target not in labels:

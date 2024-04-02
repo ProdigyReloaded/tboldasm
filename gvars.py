@@ -15,7 +15,7 @@
 
 from typing import Optional, IO
 
-procedures: dict[int, str] = dict()
+procedures: dict[int, Optional[str]] = dict()
 labels: dict[int, str] = dict()
 f: Optional[IO] = None
 main_loc: Optional[int] = None
