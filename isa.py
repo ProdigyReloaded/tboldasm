@@ -212,7 +212,7 @@ class DefField(Instruction):
     def decode(cls, instr, is_complex, file):
         i = super(DefField, cls).decode(instr, is_complex, file)
         i.instruction_bytes.extend(read(file))
-        i.operands.append(NumericOperand(int.from_bytes(i.instruction_bytes[-1:], 'big')))
+        i.operands.insert(1, NumericOperand(int.from_bytes(i.instruction_bytes[-1:], 'big')))
         return i
 
 
