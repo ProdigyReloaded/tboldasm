@@ -12,6 +12,8 @@
 #
 # You should have received a copy of the GNU Affero General Public License along with Prodigy Reloaded. If not,
 # see <https://www.gnu.org/licenses/>.
+from __future__ import annotations
+
 import io
 import math
 import struct
@@ -204,6 +206,30 @@ class Jump(OffsetInstruction):
 
 
 class DefField(Instruction):
+    """
+    This instruction creates a new field at runtime.  Compiler version 4.210 produces byte code that does not
+    appear to match the decoding in the source attached to the patent application.
+
+    Observed syntax:
+
+      DEFINE_FIELD target, type, row, column, width, height;
+
+      Where type 'ACTION' (without quotes) or any non-zero integer literal appears to be emitted as a 6th operand in
+      the bytecode with value of 0x1.  Any other value seems to emit a value of 0x0.
+
+      The significance of this argument is not well understood.
+
+    Example:
+
+      DEFINE_FIELD STND_MENU_VAR10, 0x1, I1, I2, 6, 1;
+
+    Byte code produced:
+
+      88 80 7E F6 09 0A 00 01 36 00 01 31 01
+            ----- -- -- -------- -------- --
+            1     2  3  4        5        6   (operands)
+
+    """
     OPCODE = b'\x08'
     OPERANDS = 5
     MNEMONIC = "DEFINE_FIELD"
